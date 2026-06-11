@@ -1,0 +1,97 @@
+@APISIX_ADMIN_KEY=edd1c9f034335f136f87ad84b625c8f1
+@AZ_OPENAI_API_KEY=MICROSOFT_FOUNDRY_KEY
+@CLIENT_API_KEY=abcdefghijk2026xyz
+@RESOURCE_NAME=MICROSOFT_FOUNDRY_RESOURCE_NAME
+@DEPLOYMENT_NAME=MICROSOFT_FOUNDRY_DEPLOYMENT_NAME
+@AZURE_AI_API_VERSION=2024-06-01
+@ROUTE_APISIX=/azure-ai-gpt-5-mini-maf
+
+###
+# PASSO 1: Configurar traces do APISIX para OpenTelemetry
+curl http://127.0.0.1:9180/apisix/admin/plugin_metadata/opentelemetry -H "X-API-KEY: {{APISIX_ADMIN_KEY}}" -X PUT -d '
+{
+    "trace_id_source": "x-request-id",
+    "resource": {
+      "service.name": "APISIX"
+    },
+    "collector": {
+      "address": "elastic-agent:8200",
+      "request_timeout": 3,
+      "request_headers": {
+      }
+    },
+    "batch_span_processor": {
+      "drop_on_queue_full": false,
+      "max_queue_size": 1024,
+      "batch_timeout": 2,
+      "inactive_timeout": 1,
+      "max_export_batch_size": 16
+    },
+    "set_ngx_var": false
+}'
+
+
+###
+# PASSO 2: Criar o Consumer com a API Key do cliente.
+curl "http://127.0.0.1:9180/apisix/admin/consumers" -X PUT \
+  -H "X-API-KEY: {{APISIX_ADMIN_KEY}}" \
+  -d '{
+    "username": "consoleappchatai",
+    "plugins": {
+      "key-auth": {
+        "key": "{{CLIENT_API_KEY}}"
+      }
+    }
+  }'
+
+
+###
+# PASSO 3: Criar a rota exigindo a API Key do cliente.
+curl "http://127.0.0.1:9180/apisix/admin/routes" -X PUT \
+  -H "X-API-KEY: {{APISIX_ADMIN_KEY}}" \
+  -d '{
+    "id": "azure-ai-gpt-5-mini-maf",
+    "uri": "/azure-ai-gpt-5-mini-maf/*",
+    "methods": ["POST"],
+    "plugins": {
+      "key-auth": {},
+      "opentelemetry": {
+        "sampler": {
+          "name": "always_on"
+        }
+      },
+      "ai-proxy": {
+        "provider": "azure-openai",
+        "auth": {
+          "header": {
+            "api-key": "{{AZ_OPENAI_API_KEY}}"
+          }
+        },
+        "options":{
+          "model": "{{DEPLOYMENT_NAME}}"
+        },
+        "override": {
+          "endpoint": "https://{{RESOURCE_NAME}}.openai.azure.com/openai/deployments/{{DEPLOYMENT_NAME}}/chat/completions?api-version={{AZURE_AI_API_VERSION}}"
+        }
+      }
+    },
+    "upstream": {
+      "type": "roundrobin",
+      "nodes": {
+        "httpbin.org": 1
+      }
+    }
+  }'
+
+
+###
+# PASSO 4: Testar a rota criada.
+curl http://localhost:9080{{ROUTE_APISIX}}/bla/bla-bla \
+  -X POST \
+  -H "apikey: {{CLIENT_API_KEY}}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      { "role": "user", "content": "Fale resumidamente sobre a linguagem C#" }
+    ]
+  }'
